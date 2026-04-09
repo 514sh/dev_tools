@@ -321,6 +321,51 @@ Make sure you're on the same Docker network:
 docker network inspect dev-tools
 ```
 
+### n8n Cannot Reach External Project
+
+Docker Compose isolates networks per project. If your external project uses `external: true` but n8n still can't reach it:
+
+**Diagnosis**:
+
+```bash
+# Check what containers are on dev-tools network
+docker network inspect dev-tools | grep -A 5 "Containers"
+
+# Check your external container's network(s)
+docker inspect <your-container> | grep -A 20 "Networks"
+```
+
+**Cause**: Each `docker compose up` creates its own network scope. Even with `external: true`, containers may not be in the same network namespace.
+
+**Fix Option 1 - Manually Connect**:
+
+```bash
+# Connect your container to dev-tools manually
+docker network connect dev-tools <your-container-name>
+
+# Verify
+docker network inspect dev-tools | grep Name
+```
+
+**Fix Option 2 - Same Project Name**:
+
+```bash
+# Start your external project with same project name
+docker compose -p dev-tools -f docker-compose.yml up -d
+```
+
+**Fix Option 3 - For Reaching Host localhost**:
+
+If your external API runs on `localhost:8080` on the host, n8n container can't reach it directly. Add to n8n service in dev-tools:
+
+```yaml
+# In docker-compose.yml, add to n8n service:
+extra_hosts:
+  - "host.docker.internal:host-gateway"
+```
+
+Then in n8n HTTP Request, use `http://host.docker.internal:8080`
+
 ---
 
 ## Best Practices
