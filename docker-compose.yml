@@ -1,0 +1,313 @@
+services:
+
+  # =============================================================================
+  # DATA SERVICES
+  # =============================================================================
+
+  postgres:
+    image: postgres:${POSTGRES_VERSION:-15}-alpine
+    container_name: devtools_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-devtools}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-devtools}
+    volumes:
+      - devtools_postgres_data:/var/lib/postgresql/data
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    networks:
+      - dev-tools
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-devtools} -d ${POSTGRES_DB:-devtools}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    profiles:
+      - minimal
+      - data
+      - ai
+      - full
+
+  mongodb:
+    image: mongo:${MONGODB_VERSION:-7}
+    container_name: devtools_mongodb
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_INITDB_ROOT_USERNAME:-devtools}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_INITDB_ROOT_PASSWORD}
+    volumes:
+      - devtools_mongodb_data:/data/db
+    ports:
+      - "${MONGODB_PORT:-27017}:27017"
+    networks:
+      - dev-tools
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    profiles:
+      - data
+      - full
+
+  redis:
+    image: redis:${REDIS_VERSION:-7}-alpine
+    container_name: devtools_redis
+    restart: unless-stopped
+    command: redis-server --requirepass ${REDIS_PASSWORD}
+    volumes:
+      - devtools_redis_data:/data
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    networks:
+      - dev-tools
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    profiles:
+      - minimal
+      - data
+      - ai
+      - full
+
+  # =============================================================================
+  # SEARCH & AI SERVICES
+  # =============================================================================
+
+  meilisearch:
+    image: getmeili/meilisearch:v${MEILISEARCH_VERSION:-1.6.1}
+    container_name: devtools_meilisearch
+    restart: unless-stopped
+    environment:
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
+      MEILI_ENV: development
+    volumes:
+      - devtools_meilisearch_data:/meili_data
+    ports:
+      - "${MEILISEARCH_PORT:-7700}:7700"
+    networks:
+      - dev-tools
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--spider", "http://localhost:7700/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    profiles:
+      - data
+      - ai
+      - full
+
+  qdrant:
+    image: qdrant/qdrant:v${QDRANT_VERSION:-1.7.4}
+    container_name: devtools_qdrant
+    restart: unless-stopped
+    environment:
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY}
+    volumes:
+      - devtools_qdrant_data:/qdrant/storage
+    ports:
+      - "${QDRANT_PORT:-6333}:6333"
+      - "${QDRANT_GRPC_PORT:-6334}:6334"
+    networks:
+      - dev-tools
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/readyz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    profiles:
+      - ai
+      - full
+
+  ollama:
+    image: ollama/ollama:${OLLAMA_VERSION:-latest}
+    container_name: devtools_ollama
+    restart: unless-stopped
+    environment:
+      OLLAMA_HOST: ${OLLAMA_HOST:-0.0.0.0:11434}
+    volumes:
+      - devtools_ollama_data:/root/.ollama
+      - ollama_models:/root/.ollama
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    networks:
+      - dev-tools
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    profiles:
+      - ai
+      - full
+
+  # =============================================================================
+  # AUTOMATION & WORKERS
+  # =============================================================================
+
+  n8n:
+    image: n8nio/n8n:${N8N_VERSION:-latest}
+    container_name: devtools_n8n
+    restart: unless-stopped
+    environment:
+      - N8N_BASIC_AUTH_USER=${N8N_BASIC_AUTH_USER:-admin}
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_BASIC_AUTH_PASSWORD}
+      - N8N_PROTOCOL=${N8N_PROTOCOL:-http}
+      - N8N_HOST=${N8N_HOST:-localhost}
+      - N8N_PORT=5678
+      - N8N_EXECUTIONS_MODE=regular
+      - EXECUTIONS_DATA_SAVE_ON_ERROR=all
+      - EXECUTIONS_DATA_SAVE_ON_SUCCESS=all
+      - EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS=true
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=postgres
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=${POSTGRES_DB:-devtools}
+      - DB_POSTGRESDB_USER=${POSTGRES_USER:-devtools}
+      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
+    volumes:
+      - devtools_n8n_data:/home/node/.n8n
+    ports:
+      - "${N8N_PORT:-5678}:5678"
+    networks:
+      - dev-tools
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--spider", "http://localhost:5678/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    profiles:
+      - automation
+      - full
+
+  celery_worker:
+    build:
+      context: ./services/celery_worker
+      dockerfile: Dockerfile
+    container_name: devtools_celery_worker
+    restart: unless-stopped
+    environment:
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://:${REDIS_PASSWORD}@redis:6379/0}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://:${REDIS_PASSWORD}@redis:6379/1}
+    volumes:
+      - ./services/celery_worker:/app
+    networks:
+      - dev-tools
+    depends_on:
+      redis:
+        condition: service_healthy
+    profiles:
+      - automation
+      - full
+
+  # =============================================================================
+  # PROXY SERVICES
+  # =============================================================================
+
+  traefik:
+    image: traefik:v${TRAEFIK_VERSION:-3.0}
+    container_name: devtools_traefik
+    restart: unless-stopped
+    command:
+      - "--api.dashboard=true"
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.docker.network=dev-tools"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--log.level=INFO"
+      - "--accesslog=true"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    ports:
+      - "${TRAEFIK_HTTP_PORT:-80}:80"
+      - "${TRAEFIK_HTTPS_PORT:-443}:443"
+      - "${TRAEFIK_DASHBOARD_PORT:-8090}:8090"
+    networks:
+      - dev-tools
+    profiles:
+      - full
+
+  tor:
+    # Using alpine with tor installed
+    image: alpine:${TOR_VERSION:-latest}
+    container_name: devtools_tor
+    restart: unless-stopped
+    command: ["sh", "-c", "apk add --no-cache tor && tor"]
+    environment:
+      TOR_CONTROL_PASSWORD: ${TOR_CONTROL_PASSWORD}
+    volumes:
+      - devtools_tor_data:/var/lib/tor
+    ports:
+      - "${TOR_SOCKS_PORT:-9050}:9050"
+      - "${TOR_CONTROL_PORT:-9051}:9051"
+    networks:
+      - dev-tools
+    healthcheck:
+      test: ["CMD-SHELL", "apk add --no-cache tor && torify echo 'Connection test'"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    profiles:
+      - privacy
+      - full
+
+  privoxy:
+    image: vimagick/privoxy:latest
+    container_name: devtools_privoxy
+    restart: unless-stopped
+    environment:
+      - TOR_HOST=tor
+      - TOR_SOCKS_PORT=9050
+    ports:
+      - "${TOR_HTTP_PORT:-8118}:8118"
+    networks:
+      - dev-tools
+    depends_on:
+      - tor
+    profiles:
+      - privacy
+      - full
+
+# =============================================================================
+# NETWORKS
+# =============================================================================
+
+networks:
+  dev-tools:
+    name: ${DEVTOOLS_NETWORK:-dev-tools}
+    driver: bridge
+    external: false
+
+# =============================================================================
+# VOLUMES
+# =============================================================================
+
+volumes:
+  devtools_postgres_data:
+    name: devtools_postgres_data
+  devtools_mongodb_data:
+    name: devtools_mongodb_data
+  devtools_redis_data:
+    name: devtools_redis_data
+  devtools_meilisearch_data:
+    name: devtools_meilisearch_data
+  devtools_qdrant_data:
+    name: devtools_qdrant_data
+  devtools_ollama_data:
+    name: devtools_ollama_data
+  devtools_n8n_data:
+    name: devtools_n8n_data
+  devtools_tor_data:
+    name: devtools_tor_data
+  ollama_models:
+    name: devtools_ollama_models
