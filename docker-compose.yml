@@ -280,6 +280,67 @@ services:
       - privacy
       - full
 
+  # =============================================================================
+  # SECRETS MANAGEMENT
+  # =============================================================================
+
+  vault:
+    image: hashicorp/vault:${VAULT_VERSION:-1.15}
+    container_name: devtools_vault
+    restart: unless-stopped
+    environment:
+      VAULT_ADDR: ${VAULT_ADDR:-http://localhost:8200}
+      VAULT_TOKEN: ${VAULT_TOKEN}
+    command: server -dev -dev-root-token-id=${VAULT_TOKEN}
+    volumes:
+      - devtools_vault_data:/vault/data
+    ports:
+      - "${VAULT_PORT:-8200}:8200"
+    networks:
+      - dev-tools
+    healthcheck:
+      test: ["CMD", "vault", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    profiles:
+      - secrets
+      - full
+
+  infisical:
+    image: infisical/infisical:${INFISICAL_VERSION:-latest}
+    container_name: devtools_infisical
+    restart: unless-stopped
+    environment:
+      - ENCRYPTION_KEY=${INFISICAL_ENCRYPTION_KEY}
+      - AUTH_SECRET=${INFISICAL_AUTH_SECRET}
+      - POSTGRES_USER=${POSTGRES_USER:-devtools}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB:-devtools}
+      - DB_CONNECTION_URI=postgres://${POSTGRES_USER:-devtools}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-devtools}
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379
+      - NODE_ENV=development
+      - SITE_URL=http://localhost:8080
+    volumes:
+      - devtools_infisical_data:/app/backend/data
+    ports:
+      - "${INFISICAL_PORT:-8080}:8080"
+    networks:
+      - dev-tools
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--spider", "http://localhost:8080/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    profiles:
+      - secrets
+      - full
+
 # =============================================================================
 # NETWORKS
 # =============================================================================
@@ -311,5 +372,9 @@ volumes:
     name: devtools_n8n_data
   devtools_tor_data:
     name: devtools_tor_data
+  devtools_vault_data:
+    name: devtools_vault_data
+  devtools_infisical_data:
+    name: devtools_infisical_data
   ollama_models:
     name: devtools_ollama_models
